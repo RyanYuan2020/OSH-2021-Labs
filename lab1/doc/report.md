@@ -121,4 +121,33 @@
 
    <img src="report.assets/image-20210422104429610.png" alt="image-20210422104429610" style="zoom:67%;" />
 
+## 思考题
+
+1. 请简要解释 `Linux` 与 `Ubuntu`、`Debian`、`ArchLinux`、`Fedora` 等之间的关系和区别。
+
+   Linux是一种操作系统内核(Kernel)，管理IO操作、内存和进程等。
+
+   Ubuntu、Debian等是linux的distribution。它们在kernel的基础上增加了一些常用设施（如浏览器，播放器等），GNU工具链，库，桌面环境等。
+
+2. 查阅 `PXE` 的资料，用自己的话描述它启动的过程。
+   * 客户机通知DHCP服务器其需要使用PXE
+   * DHCP服务器返回IP地址
+   * 客户机使用上述IP地址向PXE启动服务器请求启动文件
+   * 服务器通过TFTP向用户机发送启动文件
+   * 客户机使用上述文件启动
+   
+3. 查阅 `GRUB` 的资料，用自己的话描述它启动的过程。
+
+   GRUB将MBR(Master Boot Record)更换为自己的代码，指向GRUB的配置文件。当计算机启动时，BIOS将控制权转移给启动设备，设备根据MBR的信息将启动程序载入内存，并向其移交控制。GRUB根据配置文件执行启动操作。
+
+4. 说明 `UEFI Boot` 的流程，截图指出你的某一个系统的 `EFI` 分区中包含哪些文件。
+
+   * 流程：根据GUID分区表(GPT)找到EFI分区。EFI分区一般使用FAT家族的文件系统，并存有EFI可执行文件(EFI executables)类型的bootloader。UEFI将执行这种类型的代码，最终启动操作系统。
+
+   * 分区内容浏览
+
+     使用`mountvol P: /S`将EFI分区挂载到`P:`，后使用`cmd.exe`浏览
+
+     ![image-20210422203200322](report.assets/image-20210422203200322.png)
+
    
