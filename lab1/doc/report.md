@@ -121,6 +121,10 @@
 
    <img src="report.assets/image-20210422104429610.png" alt="image-20210422104429610" style="zoom:67%;" />
 
+## Kernel
+
+删去了`Networking Support`, `Kernel Features`中的内容。删除后仍可正常运行测试程序。
+
 ## 思考题
 
 1. 请简要解释 `Linux` 与 `Ubuntu`、`Debian`、`ArchLinux`、`Fedora` 等之间的关系和区别。
@@ -128,6 +132,8 @@
    Linux是一种操作系统内核(Kernel)，管理IO操作、内存和进程等。
 
    Ubuntu、Debian等是linux的distribution。它们在kernel的基础上增加了一些常用设施（如浏览器，播放器等），GNU工具链，库，桌面环境等。
+
+   ArchLinux尽力将系统保持最简单，避免任何不必要的添加、修改和复杂增加。ArchLinux与Fedora均是社区主导开发，更适合开发者修改自己的系统。
 
 2. 查阅 `PXE` 的资料，用自己的话描述它启动的过程。
    * 客户机通知DHCP服务器其需要使用PXE
