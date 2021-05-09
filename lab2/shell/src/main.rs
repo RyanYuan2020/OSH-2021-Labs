@@ -17,6 +17,15 @@ extern "C" fn handle_sigint(_: i32) {
     unsafe {
         if pid != MAIN_PID {
             exit(0);
+        } else {
+            print!(
+                "\n{} $ ",
+                env::current_dir()
+                    .expect("Error when getting cwd")
+                    .to_str()
+                    .expect("Error when converting cwd to string")
+            );
+            io::stdout().flush().expect("Prompt output error");
         }
     }
 }
@@ -44,7 +53,7 @@ fn main() -> ! {
         );
         io::stdout().flush().expect("Prompt output error");
 
-        //parse
+        // parse
         let mut buf = Vec::new();
         let input;
         match stdin().lock().read_until(10, &mut buf) {
@@ -236,10 +245,14 @@ fn get_token_after(source: &str, delimiter: &str) -> (String, Option<String>) {
     let mut iter = source.split(delimiter);
     let cmd = iter.next().expect("No command");
     if let Some(rest) = iter.next() {
-        if let Some(file) = rest.split(|ch| ch == '>' || ch == '<' || ch == ' ').next() {
+        let rest_trimmed = rest.trim();
+        if let Some(file) = rest_trimmed
+            .split(|ch| ch == '>' || ch == '<' || ch == ' ')
+            .next()
+        {
             return (cmd.to_string(), Some(file.to_string()));
         } else {
-            return (cmd.to_string(), Some(rest.to_string()));
+            return (cmd.to_string(), Some(rest_trimmed.to_string()));
         }
     } else {
         return (cmd.to_string(), None);
@@ -289,4 +302,3 @@ fn execute_main(prog: &str, mut args: std::str::SplitWhitespace<'_>) {
         } {}
     }
 }
-
