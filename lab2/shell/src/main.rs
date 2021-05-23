@@ -9,6 +9,7 @@ use std::io::{stdin, BufRead};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{exit, Command};
+use std::str::FromStr;
 
 static mut MAIN_PID: i32 = 0;
 
@@ -54,6 +55,7 @@ fn main() -> ! {
         io::stdout().flush().expect("Prompt output error");
 
         // parse
+        let mut is_fd_directed = false;
         let mut buf = Vec::new();
         let input;
         match stdin().lock().read_until(10, &mut buf) {
@@ -78,11 +80,29 @@ fn main() -> ! {
                     IO_Select::output,
                     IO_redirection::file(file, RedirectionMode::append),
                 );
+            } else if let (_, Some(fd)) = get_token_after(cmd, ">&") {
+                let fd = i32::from_str(&fd).expect("Invalid file descriptor");
+                match get_fd_before(cmd, ">&") {
+                    None => redirection(IO_Select::output, IO_redirection::fd(fd)),
+                    Some(src_fd) => {
+                        redirection(IO_Select::out_fd(src_fd), IO_redirection::fd(fd));
+                        is_fd_directed = true
+                    }
+                };
             } else if let (_, Some(file)) = get_token_after(cmd, ">") {
-                redirection(
-                    IO_Select::output,
-                    IO_redirection::file(file, RedirectionMode::write),
-                );
+                match get_fd_before(cmd, ">") {
+                    None => redirection(
+                        IO_Select::output,
+                        IO_redirection::file(file, RedirectionMode::write),
+                    ),
+                    Some(fd) => {
+                        redirection(
+                            IO_Select::out_fd(fd),
+                            IO_redirection::file(file, RedirectionMode::write),
+                        );
+                        is_fd_directed = true;
+                    }
+                };
             }
 
             if let (_, Some(file)) = get_token_after(cmd, "<<") {
@@ -123,16 +143,28 @@ fn main() -> ! {
                     IO_redirection::file(tmp_file_path, RedirectionMode::read),
                 );
             } else if let (_, Some(file)) = get_token_after(cmd, "<") {
-                redirection(
-                    IO_Select::input,
-                    IO_redirection::file(file, RedirectionMode::read),
-                );
+                match get_fd_before(cmd, "<") {
+                    None => redirection(
+                        IO_Select::input,
+                        IO_redirection::file(file, RedirectionMode::read),
+                    ),
+                    Some(src_fd) => {
+                        redirection(
+                            IO_Select::in_fd(src_fd),
+                            IO_redirection::file(file, RedirectionMode::read),
+                        );
+                        is_fd_directed = true;
+                    }
+                };
             }
 
             cmd = cmd
                 .split(|ch| ch == '>' || ch == '<')
                 .next()
                 .expect("No command");
+            if is_fd_directed == true {
+                cmd = cmd.trim_end_matches(|ch: char| ch == ' ' || ch.is_digit(10));
+            }
 
             let mut args = cmd.split_whitespace();
             let prog = args.next();
@@ -216,10 +248,13 @@ fn main() -> ! {
 enum IO_Select {
     input,
     output,
+    in_fd(i32),
+    out_fd(i32),
 }
 enum IO_redirection {
     pipe((i32, i32)),
     file(String, RedirectionMode),
+    fd(i32),
     default,
 }
 
@@ -229,9 +264,9 @@ enum RedirectionMode {
     read,
 }
 
-fn redirection(io_selct: IO_Select, io_redirection: IO_redirection) -> () {
+fn redirection(io_select: IO_Select, io_redirection: IO_redirection) -> () {
     match io_redirection {
-        IO_redirection::pipe(pipefd) => match io_selct {
+        IO_redirection::pipe(pipefd) => match io_select {
             IO_Select::input => {
                 close(pipefd.1);
                 dup2(pipefd.0, 0).expect("error");
@@ -242,39 +277,71 @@ fn redirection(io_selct: IO_Select, io_redirection: IO_redirection) -> () {
                 dup2(pipefd.1, 1).expect("error");
                 close(pipefd.1);
             }
+            _ => (),
         },
-        IO_redirection::file(file, mode) => match mode {
-            RedirectionMode::append => {
-                let f = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(file)
-                    .expect("Failed to open file");
-                let fd = f.as_raw_fd();
-                dup2(fd, 1).expect("error");
-                close(fd);
+        IO_redirection::file(file, mode) => {
+            let fd_to_redirect = match io_select {
+                IO_Select::input => 0,
+                IO_Select::output => 1,
+                IO_Select::in_fd(fd) => fd,
+                IO_Select::out_fd(fd) => fd,
+            };
+            match mode {
+                RedirectionMode::append => {
+                    let f = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(file)
+                        .expect("Failed to open file");
+                    let fd = f.as_raw_fd();
+                    dup2(fd, fd_to_redirect).expect("error");
+                    close(fd);
+                }
+                RedirectionMode::write => {
+                    let f = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .open(file)
+                        .expect("Failed to open file");
+                    let fd = f.as_raw_fd();
+                    dup2(fd, fd_to_redirect).expect("error");
+                    close(fd);
+                }
+                RedirectionMode::read => {
+                    let f = OpenOptions::new()
+                        .read(true)
+                        .open(file)
+                        .expect("Failed to open file");
+                    let fd = f.as_raw_fd();
+                    dup2(fd, fd_to_redirect).expect("error");
+                    close(fd);
+                }
             }
-            RedirectionMode::write => {
-                let f = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .open(file)
-                    .expect("Failed to open file");
-                let fd = f.as_raw_fd();
-                dup2(fd, 1).expect("error");
-                close(fd);
-            }
-            RedirectionMode::read => {
-                let f = OpenOptions::new()
-                    .read(true)
-                    .open(file)
-                    .expect("Failed to open file");
-                let fd = f.as_raw_fd();
-                dup2(fd, 0).expect("error");
-                close(fd);
-            }
-        },
-        IO_redirection::default => (),
+        }
+        IO_redirection::fd(obj_fd) => {
+            let fd_to_redirect = match io_select {
+                IO_Select::input => 0,
+                IO_Select::output => 1,
+                IO_Select::in_fd(fd) => fd,
+                IO_Select::out_fd(fd) => fd,
+            };
+            dup2(obj_fd, fd_to_redirect).expect("error");
+            close(obj_fd);
+        }
+        _ => (),
+    }
+}
+
+fn get_fd_before(source: &str, delimiter: &str) -> Option<i32> {
+    let mut iter = source.split(delimiter);
+    let cmd = iter.next().expect("No command");
+    if let Some(fd_str) = cmd.split_whitespace().last() {
+        match i32::from_str(fd_str) {
+            Ok(fd_n) => Some(fd_n),
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
