@@ -1,5 +1,42 @@
 # Report on Lab02: Shell
 
+## Shell
+
+### 实现功能及测试样例
+
+* 所有要求的基础功能
+
+  * Pipe， IO Redirection
+
+    `$ ls --help | grep and | wc > res.txt`
+
+  * 对`SIGINT`信号的相应（`ctrl+C`）
+
+  * 无其他输入接受`EOF`后结束shell（`ctrl+D`）
+
+* 选做内容
+
+  * 基于file descriptor的IO重定向
+
+    `$ grep char 0< file.txt 1>&2`
+
+    `$ grep char <file1.txt 1>file2.txt`
+
+  * here document
+
+    ```bash
+    $ wc << delimiter
+    > this
+    > is
+    > a
+    > test
+    > delimiter
+    ```
+
+### 编译方式
+
+本项目使用`cargo`管理。在`lab2/shell`目录下使用`cargo build`可编译本工程；`cargo run`运行。
+
 ## 使用 `strace `工具追踪系统调用
 
 `strace target/debug/shell`

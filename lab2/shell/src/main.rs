@@ -1,7 +1,7 @@
 use nix::sys::signal;
-use nix::sys::signal::{SigHandler, Signal};
-use nix::sys::wait::{wait, waitpid};
-use nix::unistd::{close, dup, dup2, fork, getpgrp, getpid, pipe, setpgid, ForkResult, Pid};
+use nix::sys::signal::SigHandler;
+use nix::sys::wait::wait;
+use nix::unistd::{close, dup, dup2, fork, getpgrp, getpid, pipe, setpgid, ForkResult};
 use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -11,8 +11,12 @@ use std::os::unix::process::CommandExt;
 use std::process::{exit, Command};
 use std::str::FromStr;
 
+/// Used to handle signal SIGINT.  
+/// `MAIN_PID` is the pid of shell process. 
+/// When receiving signal SIGINT, the process terminates
+/// if it is a child process.  For the parent process, 
+/// i.e. the shell, it continues with a prompt
 static mut MAIN_PID: i32 = 0;
-
 extern "C" fn handle_sigint(_: i32) {
     let pid: i32 = getpid().into();
     unsafe {
@@ -31,6 +35,7 @@ extern "C" fn handle_sigint(_: i32) {
     }
 }
 fn main() -> ! {
+    // Register for the ctrl+C signal
     let sig_action = signal::SigAction::new(
         SigHandler::Handler(handle_sigint),
         signal::SaFlags::empty(),
@@ -39,10 +44,10 @@ fn main() -> ! {
     unsafe {
         signal::sigaction(signal::SIGINT, &sig_action).expect("Error");
     }
-
     unsafe {
         MAIN_PID = getpid().into();
     }
+
     loop {
         // Prompt
         print!(
@@ -54,7 +59,7 @@ fn main() -> ! {
         );
         io::stdout().flush().expect("Prompt output error");
 
-        // parse
+        // Read and parse the command
         let mut is_fd_directed = false;
         let mut buf = Vec::new();
         let input;
@@ -70,35 +75,37 @@ fn main() -> ! {
         let cmds: Vec<&str> = input.split('|').collect();
         let cmds_num = cmds.len();
 
+        // No pipe
         if cmds_num == 1 {
-            // No pipe
             let mut cmd = cmds[0];
             let stdout_copy = dup(1).expect("Failed to fetch stdout fd");
             let stdin_copy = dup(0).expect("Failed to fetch stdin fd");
+
+            // Check the IO redirection
             if let (_, Some(file)) = get_token_after(cmd, ">>") {
                 redirection(
-                    IO_Select::output,
-                    IO_redirection::file(file, RedirectionMode::append),
+                    IOSelect::Output,
+                    IORedirection::file(file, RedirectionMode::append),
                 );
             } else if let (_, Some(fd)) = get_token_after(cmd, ">&") {
                 let fd = i32::from_str(&fd).expect("Invalid file descriptor");
                 match get_fd_before(cmd, ">&") {
-                    None => redirection(IO_Select::output, IO_redirection::fd(fd)),
+                    None => redirection(IOSelect::Output, IORedirection::fd(fd)),
                     Some(src_fd) => {
-                        redirection(IO_Select::out_fd(src_fd), IO_redirection::fd(fd));
+                        redirection(IOSelect::out_fd(src_fd), IORedirection::fd(fd));
                         is_fd_directed = true
                     }
                 };
             } else if let (_, Some(file)) = get_token_after(cmd, ">") {
                 match get_fd_before(cmd, ">") {
                     None => redirection(
-                        IO_Select::output,
-                        IO_redirection::file(file, RedirectionMode::write),
+                        IOSelect::Output,
+                        IORedirection::file(file, RedirectionMode::write),
                     ),
                     Some(fd) => {
                         redirection(
-                            IO_Select::out_fd(fd),
-                            IO_redirection::file(file, RedirectionMode::write),
+                            IOSelect::out_fd(fd),
+                            IORedirection::file(file, RedirectionMode::write),
                         );
                         is_fd_directed = true;
                     }
@@ -108,7 +115,6 @@ fn main() -> ! {
             if let (_, Some(file)) = get_token_after(cmd, "<<") {
                 let delimiter = file;
                 let mut buf = Vec::new();
-                let mut input = String::new();
                 let tmp_file_path = String::from("/tmp/ryan_shell_redirection_tmp");
                 let mut f = OpenOptions::new()
                     .create(true)
@@ -132,32 +138,33 @@ fn main() -> ! {
                                 &mut f,
                                 "{}",
                                 std::str::from_utf8(&buf).expect("Invalid UTF-8 sequence")
-                            );
+                            ).expect("Failed to write to tmp file");
                         }
                         _ => panic!("Error occurred when reading"),
                     };
                 }
-                f.flush();
+                f.flush().expect("Failed to write to tmp file");
                 redirection(
-                    IO_Select::input,
-                    IO_redirection::file(tmp_file_path, RedirectionMode::read),
+                    IOSelect::Input,
+                    IORedirection::file(tmp_file_path, RedirectionMode::read),
                 );
             } else if let (_, Some(file)) = get_token_after(cmd, "<") {
                 match get_fd_before(cmd, "<") {
                     None => redirection(
-                        IO_Select::input,
-                        IO_redirection::file(file, RedirectionMode::read),
+                        IOSelect::Input,
+                        IORedirection::file(file, RedirectionMode::read),
                     ),
                     Some(src_fd) => {
                         redirection(
-                            IO_Select::in_fd(src_fd),
-                            IO_redirection::file(file, RedirectionMode::read),
+                            IOSelect::in_fd(src_fd),
+                            IORedirection::file(file, RedirectionMode::read),
                         );
                         is_fd_directed = true;
                     }
                 };
             }
 
+            // Remove the redirection part in `cmd`
             cmd = cmd
                 .split(|ch| ch == '>' || ch == '<')
                 .next()
@@ -169,38 +176,44 @@ fn main() -> ! {
             let mut args = cmd.split_whitespace();
             let prog = args.next();
 
+            // Execute
             if let Some(prog) = prog {
                 execute_main(prog, args);
             } else {
                 panic!("Not program input");
             };
-            dup2(stdin_copy, 0);
-            dup2(stdout_copy, 1);
-        } else {
-            // Pipe
+
+            // Restore stdin, stdout
+            dup2(stdin_copy, 0).expect("error");
+            dup2(stdout_copy, 1).expect("error");
+        } 
+        else { // Pipe
             let mut last_pipefd = (0, 0);
+
             for (i, mut cmd) in cmds.into_iter().enumerate() {
                 let mut pipefd = (0, 1);
 
+                // Record connection between processes through pipe
                 if i != cmds_num - 1 {
                     pipefd = pipe().expect("Error occurred when generating pipe");
                 }
                 let (mut in_redirection, mut out_redirection) =
-                    (IO_redirection::default, IO_redirection::default);
+                    (IORedirection::default, IORedirection::default);
                 if i != cmds_num - 1 {
-                    out_redirection = IO_redirection::pipe(pipefd);
+                    out_redirection = IORedirection::pipe(pipefd);
                 }
                 if i != 0 {
-                    in_redirection = IO_redirection::pipe(last_pipefd);
+                    in_redirection = IORedirection::pipe(last_pipefd);
                 }
 
+                // Check the IO redirection
                 if let (_, Some(file)) = get_token_after(cmd, ">>") {
-                    out_redirection = IO_redirection::file(file, RedirectionMode::append);
+                    out_redirection = IORedirection::file(file, RedirectionMode::append);
                 } else if let (_, Some(file)) = get_token_after(cmd, ">") {
-                    out_redirection = IO_redirection::file(file, RedirectionMode::write);
+                    out_redirection = IORedirection::file(file, RedirectionMode::write);
                 }
                 if let (_, Some(file)) = get_token_after(cmd, "<") {
-                    in_redirection = IO_redirection::file(file, RedirectionMode::read);
+                    in_redirection = IORedirection::file(file, RedirectionMode::read);
                 }
 
                 cmd = &cmd
@@ -211,14 +224,15 @@ fn main() -> ! {
                 let mut args = cmd.split_whitespace();
                 let prog = args.next();
 
+                // Execute with child process
                 if let Some(prog) = prog {
                     match fork() {
                         Ok(ForkResult::Parent { child: pid }) => {
                             setpgid(pid, getpgrp()).expect("Error")
                         }
-                        Ok(ForkResult::Child) => {
-                            redirection(IO_Select::input, in_redirection);
-                            redirection(IO_Select::output, out_redirection);
+                        Ok(ForkResult::Child) => { // Execute in child process
+                            redirection(IOSelect::Input, in_redirection);
+                            redirection(IOSelect::Output, out_redirection);
                             if !execute_builtin(prog, &mut args) {
                                 eprintln!("{}", Command::new(prog).args(args).exec());
                             }
@@ -233,7 +247,7 @@ fn main() -> ! {
                 last_pipefd = pipefd;
 
                 if i != cmds_num - 1 {
-                    close(pipefd.1);
+                    close(pipefd.1).expect("Failed to redirect IO");
                 }
             }
 
@@ -245,46 +259,47 @@ fn main() -> ! {
     }
 }
 
-enum IO_Select {
-    input,
-    output,
+enum IOSelect {
+    Input,
+    Output,
     in_fd(i32),
     out_fd(i32),
 }
-enum IO_redirection {
+enum IORedirection {
     pipe((i32, i32)),
     file(String, RedirectionMode),
     fd(i32),
     default,
 }
-
 enum RedirectionMode {
     append,
     write,
     read,
 }
 
-fn redirection(io_select: IO_Select, io_redirection: IO_redirection) -> () {
+/// Used to perform IO redirection
+/// It supports redirection beteen file descripters, pipe fd, files. 
+fn redirection(io_select: IOSelect, io_redirection: IORedirection) -> () {
     match io_redirection {
-        IO_redirection::pipe(pipefd) => match io_select {
-            IO_Select::input => {
-                close(pipefd.1);
+        IORedirection::pipe(pipefd) => match io_select {
+            IOSelect::Input => {
+                close(pipefd.1).expect("Failed to redirect IO");
                 dup2(pipefd.0, 0).expect("error");
-                close(pipefd.0);
+                close(pipefd.0).expect("Failed to redirect IO");
             }
-            IO_Select::output => {
-                close(pipefd.0);
+            IOSelect::Output => {
+                close(pipefd.0).expect("Failed to redirect IO");
                 dup2(pipefd.1, 1).expect("error");
-                close(pipefd.1);
+                close(pipefd.1).expect("Failed to redirect IO");
             }
             _ => (),
         },
-        IO_redirection::file(file, mode) => {
+        IORedirection::file(file, mode) => {
             let fd_to_redirect = match io_select {
-                IO_Select::input => 0,
-                IO_Select::output => 1,
-                IO_Select::in_fd(fd) => fd,
-                IO_Select::out_fd(fd) => fd,
+                IOSelect::Input => 0,
+                IOSelect::Output => 1,
+                IOSelect::in_fd(fd) => fd,
+                IOSelect::out_fd(fd) => fd,
             };
             match mode {
                 RedirectionMode::append => {
@@ -295,7 +310,7 @@ fn redirection(io_select: IO_Select, io_redirection: IO_redirection) -> () {
                         .expect("Failed to open file");
                     let fd = f.as_raw_fd();
                     dup2(fd, fd_to_redirect).expect("error");
-                    close(fd);
+                    close(fd).expect("Failed to redirect IO");
                 }
                 RedirectionMode::write => {
                     let f = OpenOptions::new()
@@ -305,7 +320,7 @@ fn redirection(io_select: IO_Select, io_redirection: IO_redirection) -> () {
                         .expect("Failed to open file");
                     let fd = f.as_raw_fd();
                     dup2(fd, fd_to_redirect).expect("error");
-                    close(fd);
+                    close(fd).expect("Failed to redirect IO");
                 }
                 RedirectionMode::read => {
                     let f = OpenOptions::new()
@@ -314,24 +329,26 @@ fn redirection(io_select: IO_Select, io_redirection: IO_redirection) -> () {
                         .expect("Failed to open file");
                     let fd = f.as_raw_fd();
                     dup2(fd, fd_to_redirect).expect("error");
-                    close(fd);
+                    close(fd).expect("Failed to redirect IO");
                 }
             }
         }
-        IO_redirection::fd(obj_fd) => {
+        IORedirection::fd(obj_fd) => {
             let fd_to_redirect = match io_select {
-                IO_Select::input => 0,
-                IO_Select::output => 1,
-                IO_Select::in_fd(fd) => fd,
-                IO_Select::out_fd(fd) => fd,
+                IOSelect::Input => 0,
+                IOSelect::Output => 1,
+                IOSelect::in_fd(fd) => fd,
+                IOSelect::out_fd(fd) => fd,
             };
             dup2(obj_fd, fd_to_redirect).expect("error");
-            close(obj_fd);
+            close(obj_fd).expect("Failed to redirect IO");
         }
         _ => (),
     }
 }
 
+/// A string parsing tool. Returns the number(file descripter) right before 
+/// the delimiter. If no number exists, return None. 
 fn get_fd_before(source: &str, delimiter: &str) -> Option<i32> {
     let mut iter = source.split(delimiter);
     let cmd = iter.next().expect("No command");
@@ -345,6 +362,7 @@ fn get_fd_before(source: &str, delimiter: &str) -> Option<i32> {
     }
 }
 
+/// A string parsing tool.  Returns the token after delimiter along with the substring before delimiter. 
 fn get_token_after(source: &str, delimiter: &str) -> (String, Option<String>) {
     let mut iter = source.split(delimiter);
     let cmd = iter.next().expect("No command");
@@ -360,6 +378,7 @@ fn get_token_after(source: &str, delimiter: &str) -> (String, Option<String>) {
     }
 }
 
+/// Executes built-in commands
 fn execute_builtin(prog: &str, args: &mut std::str::SplitWhitespace<'_>) -> bool {
     match prog {
         "cd" => {
@@ -387,10 +406,14 @@ fn execute_builtin(prog: &str, args: &mut std::str::SplitWhitespace<'_>) -> bool
         _ => false,
     }
 }
+
+/// For commands with no pipe
+/// Execute commands in current process if it is a built-in command.  
+/// Spawn a child process otherwise.  
 fn execute_main(prog: &str, mut args: std::str::SplitWhitespace<'_>) {
     if !execute_builtin(prog, &mut args) {
         match fork() {
-            Ok(ForkResult::Parent { child: pid }) => (),
+            Ok(ForkResult::Parent { child: _ }) => (),
             Ok(ForkResult::Child) => {
                 eprintln!("{}", Command::new(prog).args(args).exec());
                 exit(0);
