@@ -85,7 +85,44 @@ fn main() -> ! {
                 );
             }
 
-            if let (_, Some(file)) = get_token_after(cmd, "<") {
+            if let (_, Some(file)) = get_token_after(cmd, "<<") {
+                let delimiter = file;
+                let mut buf = Vec::new();
+                let mut input = String::new();
+                let tmp_file_path = String::from("/tmp/ryan_shell_redirection_tmp");
+                let mut f = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .open(&tmp_file_path)
+                    .expect("Failed to open file");
+                loop {
+                    buf.clear();
+                    print!("> ");
+                    io::stdout().flush().expect("Prompt output error");
+                    match stdin().lock().read_until(10, &mut buf) {
+                        Ok(0) => exit(0),
+                        Ok(_) => {
+                            buf.pop();
+                            if std::str::from_utf8(&buf).expect("Invalid UTF-8 sequence")
+                                == delimiter
+                            {
+                                break;
+                            }
+                            writeln!(
+                                &mut f,
+                                "{}",
+                                std::str::from_utf8(&buf).expect("Invalid UTF-8 sequence")
+                            );
+                        }
+                        _ => panic!("Error occurred when reading"),
+                    };
+                }
+                f.flush();
+                redirection(
+                    IO_Select::input,
+                    IO_redirection::file(tmp_file_path, RedirectionMode::read),
+                );
+            } else if let (_, Some(file)) = get_token_after(cmd, "<") {
                 redirection(
                     IO_Select::input,
                     IO_redirection::file(file, RedirectionMode::read),
@@ -245,14 +282,11 @@ fn get_token_after(source: &str, delimiter: &str) -> (String, Option<String>) {
     let mut iter = source.split(delimiter);
     let cmd = iter.next().expect("No command");
     if let Some(rest) = iter.next() {
-        let rest_trimmed = rest.trim();
-        if let Some(file) = rest_trimmed
-            .split(|ch| ch == '>' || ch == '<' || ch == ' ')
-            .next()
-        {
+        let rest = rest.trim();
+        if let Some(file) = rest.split(|ch| ch == '>' || ch == '<' || ch == ' ').next() {
             return (cmd.to_string(), Some(file.to_string()));
         } else {
-            return (cmd.to_string(), Some(rest_trimmed.to_string()));
+            return (cmd.to_string(), Some(rest.to_string()));
         }
     } else {
         return (cmd.to_string(), None);
