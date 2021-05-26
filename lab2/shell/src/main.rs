@@ -193,10 +193,6 @@ fn main() -> ! {
                 panic!("Not program input");
             };
 
-            // stream
-            //     .shutdown(Shutdown::Both)
-            //     .expect("shutdown call failed");
-
             // Restore stdin, stdout
             dup2(stdin_copy, 0).expect("error");
             dup2(stdout_copy, 1).expect("error");
@@ -323,19 +319,19 @@ fn tcp_handler(file_path: &str, io_mode: IOSelect) -> Option<TcpStream> {
 }
 
 /// Used to perform IO redirection
-/// It supports redirection beteen file descripters, pipe fd, files.
+/// It supports redirection between file descripters, pipe fd, files.
 fn redirection(io_select: IOSelect, io_redirection: IORedirection) -> () {
     match io_redirection {
         IORedirection::pipe(pipefd) => match io_select {
             IOSelect::Input => {
-                close(pipefd.1).expect("Failed to redirect IO");
-                dup2(pipefd.0, 0).expect("error");
-                close(pipefd.0).expect("Failed to redirect IO");
+                close(pipefd.1);//.expect("Failed to redirect IO");
+                dup2(pipefd.0, 0);//.expect("error");
+                close(pipefd.0);//.expect("Failed to redirect IO");
             }
             IOSelect::Output => {
-                close(pipefd.0).expect("Failed to redirect IO");
-                dup2(pipefd.1, 1).expect("error");
-                close(pipefd.1).expect("Failed to redirect IO");
+                close(pipefd.0);//.expect("Failed to redirect IO");
+                dup2(pipefd.1, 1);//.expect("error");
+                close(pipefd.1);//.expect("Failed to redirect IO");
             }
             _ => (),
         },
