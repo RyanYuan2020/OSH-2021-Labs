@@ -3,18 +3,21 @@ use nix::sys::signal::SigHandler;
 use nix::sys::wait::wait;
 use nix::unistd::{close, dup, dup2, fork, getpgrp, getpid, pipe, setpgid, ForkResult};
 use std::env;
+use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::io::{stdin, BufRead};
+use std::net::{Shutdown, TcpStream};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{exit, Command};
 use std::str::FromStr;
 
 /// Used to handle signal SIGINT.  
-/// `MAIN_PID` is the pid of shell process. 
+/// `MAIN_PID` is the pid of shell process.
 /// When receiving signal SIGINT, the process terminates
-/// if it is a child process.  For the parent process, 
+/// if it is a child process.  For the parent process,
 /// i.e. the shell, it continues with a prompt
 static mut MAIN_PID: i32 = 0;
 extern "C" fn handle_sigint(_: i32) {
@@ -47,7 +50,6 @@ fn main() -> ! {
     unsafe {
         MAIN_PID = getpid().into();
     }
-
     loop {
         // Prompt
         print!(
@@ -80,6 +82,7 @@ fn main() -> ! {
             let mut cmd = cmds[0];
             let stdout_copy = dup(1).expect("Failed to fetch stdout fd");
             let stdin_copy = dup(0).expect("Failed to fetch stdin fd");
+            let mut stream;
 
             // Check the IO redirection
             if let (_, Some(file)) = get_token_after(cmd, ">>") {
@@ -98,10 +101,13 @@ fn main() -> ! {
                 };
             } else if let (_, Some(file)) = get_token_after(cmd, ">") {
                 match get_fd_before(cmd, ">") {
-                    None => redirection(
-                        IOSelect::Output,
-                        IORedirection::file(file, RedirectionMode::write),
-                    ),
+                    None => match tcp_handler(&file, IOSelect::Output) {
+                        None => redirection(
+                            IOSelect::Output,
+                            IORedirection::file(file, RedirectionMode::write),
+                        ),
+                        Some(s) => stream = s,
+                    },
                     Some(fd) => {
                         redirection(
                             IOSelect::out_fd(fd),
@@ -138,7 +144,8 @@ fn main() -> ! {
                                 &mut f,
                                 "{}",
                                 std::str::from_utf8(&buf).expect("Invalid UTF-8 sequence")
-                            ).expect("Failed to write to tmp file");
+                            )
+                            .expect("Failed to write to tmp file");
                         }
                         _ => panic!("Error occurred when reading"),
                     };
@@ -150,10 +157,13 @@ fn main() -> ! {
                 );
             } else if let (_, Some(file)) = get_token_after(cmd, "<") {
                 match get_fd_before(cmd, "<") {
-                    None => redirection(
-                        IOSelect::Input,
-                        IORedirection::file(file, RedirectionMode::read),
-                    ),
+                    None => match tcp_handler(&file, IOSelect::Input) {
+                        None => redirection(
+                            IOSelect::Input,
+                            IORedirection::file(file, RedirectionMode::read),
+                        ),
+                        Some(s) => stream = s,
+                    },
                     Some(src_fd) => {
                         redirection(
                             IOSelect::in_fd(src_fd),
@@ -183,11 +193,15 @@ fn main() -> ! {
                 panic!("Not program input");
             };
 
+            // stream
+            //     .shutdown(Shutdown::Both)
+            //     .expect("shutdown call failed");
+
             // Restore stdin, stdout
             dup2(stdin_copy, 0).expect("error");
             dup2(stdout_copy, 1).expect("error");
-        } 
-        else { // Pipe
+        } else {
+            // Pipe
             let mut last_pipefd = (0, 0);
 
             for (i, mut cmd) in cmds.into_iter().enumerate() {
@@ -230,7 +244,8 @@ fn main() -> ! {
                         Ok(ForkResult::Parent { child: pid }) => {
                             setpgid(pid, getpgrp()).expect("Error")
                         }
-                        Ok(ForkResult::Child) => { // Execute in child process
+                        Ok(ForkResult::Child) => {
+                            // Execute in child process
                             redirection(IOSelect::Input, in_redirection);
                             redirection(IOSelect::Output, out_redirection);
                             if !execute_builtin(prog, &mut args) {
@@ -271,14 +286,44 @@ enum IORedirection {
     fd(i32),
     default,
 }
+
 enum RedirectionMode {
     append,
     write,
     read,
 }
 
+fn tcp_handler(file_path: &str, io_mode: IOSelect) -> Option<TcpStream> {
+    // TCP parser
+    let path: Vec<_> = file_path.split('/').collect();
+    if path.len() != 5 || path[0] != "" || path[1] != "dev" || path[2] != "tcp" {
+        return None;
+    } else {
+        if let Ok(stream) =
+            TcpStream::connect(path[path.len() - 2].to_string() + ":" + path[path.len() - 1])
+        {
+            let raw_fd = stream.as_raw_fd();
+            match io_mode {
+                IOSelect::Input => {
+                    dup2(raw_fd, 0).expect("error");
+                    close(raw_fd).expect("Failed to redirect IO");
+                    Some(stream)
+                }
+                IOSelect::Output => {
+                    dup2(raw_fd, 1).expect("error");
+                    close(raw_fd).expect("Failed to redirect IO");
+                    Some(stream)
+                }
+                _ => panic!("Failed to redirect IO"),
+            }
+        } else {
+            panic!("Failed to connect!");
+        }
+    }
+}
+
 /// Used to perform IO redirection
-/// It supports redirection beteen file descripters, pipe fd, files. 
+/// It supports redirection beteen file descripters, pipe fd, files.
 fn redirection(io_select: IOSelect, io_redirection: IORedirection) -> () {
     match io_redirection {
         IORedirection::pipe(pipefd) => match io_select {
@@ -347,8 +392,8 @@ fn redirection(io_select: IOSelect, io_redirection: IORedirection) -> () {
     }
 }
 
-/// A string parsing tool. Returns the number(file descripter) right before 
-/// the delimiter. If no number exists, return None. 
+/// A string parsing tool. Returns the number(file descripter) right before
+/// the delimiter. If no number exists, return None.
 fn get_fd_before(source: &str, delimiter: &str) -> Option<i32> {
     let mut iter = source.split(delimiter);
     let cmd = iter.next().expect("No command");
@@ -362,7 +407,7 @@ fn get_fd_before(source: &str, delimiter: &str) -> Option<i32> {
     }
 }
 
-/// A string parsing tool.  Returns the token after delimiter along with the substring before delimiter. 
+/// A string parsing tool.  Returns the token after delimiter along with the substring before delimiter.
 fn get_token_after(source: &str, delimiter: &str) -> (String, Option<String>) {
     let mut iter = source.split(delimiter);
     let cmd = iter.next().expect("No command");
