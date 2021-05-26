@@ -1,4 +1,3 @@
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <stdio.h>
@@ -34,14 +33,14 @@ int main()
 
 		if (bind(server_sockfd, (struct sockaddr *)&server_sockaddr, sizeof(server_sockaddr)) == -1)
 		{
-			perror("Failed to bind");
+			perror("Recv Server: Failed to bind");
 			exit(1);
 		}
 
-		printf("Listen port %d\n", RECVPORT);
+		printf("Recv Server: Listen port %d\n", RECVPORT);
 		if (listen(server_sockfd, QUEUE) == -1)
 		{
-			perror("Failed while listening");
+			perror("Recv Server: Failed while listening");
 			exit(1);
 		}
 
@@ -51,15 +50,15 @@ int main()
 
 		while (1)
 		{
-			printf("Waiting for client connection\n");
+			printf("Recv Server: Waiting for client connection\n");
 
 			int conn = accept(server_sockfd, (struct sockaddr *)&client_addr, &length);
 			if (conn < 0)
 			{
-				perror("Failed to connect");
+				perror("Recv Server: Failed to connect");
 				exit(1);
 			}
-			printf("Client is successfully connected\n");
+			printf("Recv Server: Client is successfully connected\n");
 			while (1)
 			{
 				memset(buffer, 0, sizeof(buffer));
@@ -69,7 +68,7 @@ int main()
 					close(conn);
 					break;
 				}
-				printf("Data received from client：%s\n", buffer);
+				printf("Recv Server: Data received from client：%s\n", buffer);
 			}
 		}
 		close(server_sockfd);
@@ -92,14 +91,14 @@ int main()
 
 			if (bind(server_sockfd, (struct sockaddr *)&server_sockaddr, sizeof(server_sockaddr)) == -1)
 			{
-				perror("Failed to bind at send server");
+				perror("Send Server: Failed to bind at send server");
 				exit(1);
 			}
 
-			printf("Listen port %d\n", SENDPORT);
+			printf("Send Server: Listen port %d\n", SENDPORT);
 			if (listen(server_sockfd, QUEUE) == -1)
 			{
-				perror("Failed while listening");
+				perror("Send Server: Failed while listening");
 				exit(1);
 			}
 
@@ -109,19 +108,19 @@ int main()
 
 			while (1)
 			{
-				printf("Waiting for client connection\n");
+				printf("Send Server: Waiting for client connection\n");
 
 				int conn = accept(server_sockfd, (struct sockaddr *)&client_addr, &length);
 				if (conn < 0)
 				{
-					perror("Failed to connect");
+					perror("Send Server: Failed to connect");
 					exit(1);
 				}
-				printf("Client is successfully connected\n");
+				printf("Send Server: Client is successfully connected\n");
 
 				const char *msg = "Hello World!\nLine2\nLine3\n";
 				send(conn, msg, strlen(msg), 0);
-				printf("Data sent to client：%s\n", msg);
+				printf("Send Server: Data sent to client：%s\n", msg);
 				close(conn);
 			}
 			close(server_sockfd);
