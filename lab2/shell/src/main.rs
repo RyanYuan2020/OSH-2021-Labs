@@ -14,18 +14,18 @@ use std::path::Path;
 use std::process::{exit, Command};
 use std::str::FromStr;
 
-/// Used to handle signal SIGINT.  
-/// `MAIN_PID` is the pid of shell process.
-/// When receiving signal SIGINT, the process terminates
-/// if it is a child process.  For the parent process,
-/// i.e. the shell, it continues with a prompt
+/// The pid of shell process(i.e. parent process).\
+/// Used to handle signal `SIGINT`.  \
+/// When receiving signal SIGINT, the process
+/// * terminates if it is a child process.  
+/// * continues with a prompt if it is the parent process.  
 static mut MAIN_PID: i32 = 0;
 
 /// To indicate whether the shell is waiting for input.  
 /// This flag is used to determine the behavior of sig_handler.
-/// For parent process, it outputs a prompt when receiving Ctrl+C
+/// * For parent process, it outputs a prompt when receiving Ctrl+C
 /// if it is waiting for input;
-/// otherwise, it does not need to do anything. The child process will
+/// * otherwise, it does not need to do anything. The child process will
 /// terminate, `wait()` in parent process returns, and parent process outputs
 /// prompt as usual.  
 static mut WAITING: bool = false;
@@ -51,6 +51,7 @@ extern "C" fn handle_sigint(_: i32) {
         }
     }
 }
+
 fn main() -> ! {
     // Register for the ctrl+C signal
     let sig_action = signal::SigAction::new(
@@ -79,7 +80,7 @@ fn main() -> ! {
             WAITING = true;
         }
 
-        // Read and parse the command
+        // Read command
         let mut is_fd_directed = false;
         let mut buf = Vec::new();
         let input;
@@ -97,17 +98,21 @@ fn main() -> ! {
             WAITING = false;
         }
 
+        // Divide command according to pipe
         let cmds: Vec<&str> = input.split('|').collect();
         let cmds_num = cmds.len();
 
         // No pipe
         if cmds_num == 1 {
             let mut cmd = cmds[0];
+
+            // Backup the default input, output, in case of IO redireciton
             let stdout_copy = dup(1).expect("Failed to fetch stdout fd");
             let stdin_copy = dup(0).expect("Failed to fetch stdin fd");
             let mut stream;
 
-            // Check the IO redirection
+            // Check and perform the IO redirection
+            // 1. Output redirection
             if let (_, Some(file)) = get_token_after(cmd, ">>") {
                 redirection(
                     IOSelect::Output,
@@ -140,7 +145,7 @@ fn main() -> ! {
                     }
                 };
             }
-
+            // 2. Input redirection
             if let (_, Some(file)) = get_token_after(cmd, "<<") {
                 let delimiter = file;
                 let mut buf = Vec::new();
@@ -293,25 +298,7 @@ fn main() -> ! {
     }
 }
 
-enum IOSelect {
-    Input,
-    Output,
-    in_fd(i32),
-    out_fd(i32),
-}
-enum IORedirection {
-    pipe((i32, i32)),
-    file(String, RedirectionMode),
-    fd(i32),
-    default,
-}
-
-enum RedirectionMode {
-    append,
-    write,
-    read,
-}
-
+/// Handles TCP IO redirection
 fn tcp_handler(file_path: &str, io_mode: IOSelect) -> Option<TcpStream> {
     // TCP parser
     let path: Vec<_> = file_path.split('/').collect();
@@ -321,6 +308,7 @@ fn tcp_handler(file_path: &str, io_mode: IOSelect) -> Option<TcpStream> {
         if let Ok(stream) =
             TcpStream::connect(path[path.len() - 2].to_string() + ":" + path[path.len() - 1])
         {
+            // Redirect IO
             let raw_fd = stream.as_raw_fd();
             match io_mode {
                 IOSelect::Input => {
@@ -341,20 +329,39 @@ fn tcp_handler(file_path: &str, io_mode: IOSelect) -> Option<TcpStream> {
     }
 }
 
+/// These 3 `enum` is to specify the behavior of function `redirection`
+enum IOSelect {
+    Input,
+    Output,
+    in_fd(i32),
+    out_fd(i32),
+}
+enum IORedirection {
+    pipe((i32, i32)),
+    file(String, RedirectionMode),
+    fd(i32),
+    default,
+}
+enum RedirectionMode {
+    append,
+    write,
+    read,
+}
+
 /// Used to perform IO redirection
 /// It supports redirection between file descripters, pipe fd, files.
 fn redirection(io_select: IOSelect, io_redirection: IORedirection) -> () {
     match io_redirection {
         IORedirection::pipe(pipefd) => match io_select {
             IOSelect::Input => {
-                close(pipefd.1); //.expect("Failed to redirect IO");
-                dup2(pipefd.0, 0); //.expect("error");
-                close(pipefd.0); //.expect("Failed to redirect IO");
+                close(pipefd.1);
+                dup2(pipefd.0, 0);
+                close(pipefd.0);
             }
             IOSelect::Output => {
-                close(pipefd.0); //.expect("Failed to redirect IO");
-                dup2(pipefd.1, 1); //.expect("error");
-                close(pipefd.1); //.expect("Failed to redirect IO");
+                close(pipefd.0);
+                dup2(pipefd.1, 1);
+                close(pipefd.1);
             }
             _ => (),
         },
