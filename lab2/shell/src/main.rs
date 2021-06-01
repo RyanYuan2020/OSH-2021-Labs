@@ -20,20 +20,34 @@ use std::str::FromStr;
 /// if it is a child process.  For the parent process,
 /// i.e. the shell, it continues with a prompt
 static mut MAIN_PID: i32 = 0;
+
+/// To indicate whether the shell is waiting for input.  
+/// This flag is used to determine the behavior of sig_handler.
+/// For parent process, it outputs a prompt when receiving Ctrl+C
+/// if it is waiting for input;
+/// otherwise, it does not need to do anything. The child process will
+/// terminate, `wait()` in parent process returns, and parent process outputs
+/// prompt as usual.  
+static mut WAITING: bool = false;
+
 extern "C" fn handle_sigint(_: i32) {
     let pid: i32 = getpid().into();
     unsafe {
         if pid != MAIN_PID {
             exit(0);
         } else {
-            print!(
-                "\n{} $ ",
-                env::current_dir()
-                    .expect("Error when getting cwd")
-                    .to_str()
-                    .expect("Error when converting cwd to string")
-            );
-            io::stdout().flush().expect("Prompt output error");
+            if WAITING {
+                print!(
+                    "\n{} $ ",
+                    env::current_dir()
+                        .expect("Error when getting cwd")
+                        .to_str()
+                        .expect("Error when converting cwd to string")
+                );
+                io::stdout().flush().expect("Prompt output error");
+            } else {
+                print!("\n");
+            }
         }
     }
 }
@@ -61,6 +75,10 @@ fn main() -> ! {
         );
         io::stdout().flush().expect("Prompt output error");
 
+        unsafe {
+            WAITING = true;
+        }
+
         // Read and parse the command
         let mut is_fd_directed = false;
         let mut buf = Vec::new();
@@ -74,6 +92,11 @@ fn main() -> ! {
             }
             _ => panic!("Error occurred when reading"),
         };
+
+        unsafe {
+            WAITING = false;
+        }
+
         let cmds: Vec<&str> = input.split('|').collect();
         let cmds_num = cmds.len();
 
@@ -324,14 +347,14 @@ fn redirection(io_select: IOSelect, io_redirection: IORedirection) -> () {
     match io_redirection {
         IORedirection::pipe(pipefd) => match io_select {
             IOSelect::Input => {
-                close(pipefd.1);//.expect("Failed to redirect IO");
-                dup2(pipefd.0, 0);//.expect("error");
-                close(pipefd.0);//.expect("Failed to redirect IO");
+                close(pipefd.1); //.expect("Failed to redirect IO");
+                dup2(pipefd.0, 0); //.expect("error");
+                close(pipefd.0); //.expect("Failed to redirect IO");
             }
             IOSelect::Output => {
-                close(pipefd.0);//.expect("Failed to redirect IO");
-                dup2(pipefd.1, 1);//.expect("error");
-                close(pipefd.1);//.expect("Failed to redirect IO");
+                close(pipefd.0); //.expect("Failed to redirect IO");
+                dup2(pipefd.1, 1); //.expect("error");
+                close(pipefd.1); //.expect("Failed to redirect IO");
             }
             _ => (),
         },
