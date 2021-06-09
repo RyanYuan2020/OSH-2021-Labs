@@ -9,12 +9,7 @@
 
 #define is_com_char(x) ((x) != '\n' && (x) != 0)
 #define buffer_size (1 << 10)
-#define send_start (is_during_contiguos_send ? send_buffer + offset : send_buffer)
-#define init(arr, value, len)              \
-	{                                      \
-		for (size_t i = 0; i < (len); i++) \
-			(arr)[i] = (value);            \
-	}
+#define send_start (is_during_contiguous_send ? send_buffer + offset : send_buffer)
 #define MAX_CLIENT_NUM 32
 
 typedef struct Client
@@ -122,15 +117,15 @@ void *handle_chat(void *args)
 	send(client->fd_send, msg, 2, 0);
 #endif
 
-	int is_during_contiguos_send = 0;
-	int is_during_contigous_recv = 0;
+	int is_during_contiguous_send = 0;
+	int is_during_contiguous_recv = 0;
 
 	while (1)
 	{
 		recv_buffer_index = 0;
 		memset(recv_buffer, 0, buffer_size + 32);
 		len = receive(client, recv_buffer, buffer_size);
-		if (!is_during_contigous_recv && strcmp(recv_buffer, "$EXIT\n") == 0)
+		if (!is_during_contiguous_recv && strcmp(recv_buffer, "$EXIT\n") == 0)
 			break;
 		if (len <= 0) // received nothing, terminate.
 			break;
@@ -139,14 +134,14 @@ void *handle_chat(void *args)
 			if (recv_buffer_index >= buffer_size)
 			{
 				printf("Massive data received\n");
-				is_during_contigous_recv = 1;
+				is_during_contiguous_recv = 1;
 				break;
 			}
 			if (send_buffer_index >= buffer_size)
 			{
 				printf("Massive data sent\n");
 				send_to_all(client, send_start, send_buffer_index);
-				is_during_contiguos_send = 1;
+				is_during_contiguous_send = 1;
 				send_buffer_index = offset;
 			}
 			if (is_com_char(recv_buffer[recv_buffer_index]))
@@ -157,15 +152,21 @@ void *handle_chat(void *args)
 			{
 				send_buffer[send_buffer_index] = '\n';
 				send_to_all(client, send_start, send_buffer_index + 1);
-				is_during_contiguos_send = 0;
+				is_during_contiguous_send = 0;
 				send_buffer_index = offset;
-				recv_buffer_index++;
+				if (recv_buffer_index >= buffer_size - 1)
+				{
+					is_during_contiguous_recv = 0;
+					break;
+				}
+				else
+					recv_buffer_index++;
 			}
 			else // EOF
 			{
 				if (send_buffer_index != offset)
 					send_to_all(client, send_start, send_buffer_index);
-				is_during_contigous_recv = 0;
+				is_during_contiguous_recv = 0;
 				break;
 			}
 		}
@@ -198,7 +199,7 @@ int main(int argc, char **argv)
 		perror("listen");
 		return 1;
 	}
-
+	init_clients();
 	do
 	{
 		int fd = accept(sockfd, NULL, NULL);
