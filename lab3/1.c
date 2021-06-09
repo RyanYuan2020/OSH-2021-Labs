@@ -8,9 +8,7 @@
 #include <memory.h>
 
 #define is_com_char(x) ((x) != '\n' && (x) != 0)
-//
 #define buffer_size (1 << 10)
-
 #define send_start (is_during_contiguos_send ? send_buffer + offset : send_buffer)
 
 struct Pipe

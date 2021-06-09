@@ -25,7 +25,9 @@ void *handle_chat(void *data)
             printf("%d ", buffer[i]);
         }
         printf("\n");
-
+        buffer[len + 8] = 0;
+        if (strcmp(buffer + 8, "$EXIT\n") == 0)
+            return NULL;
         send(pipe->fd_recv, buffer, len + 8, 0);
     }
     return NULL;
@@ -72,6 +74,8 @@ int main(int argc, char **argv)
     pthread_create(&thread1, NULL, handle_chat, (void *)&pipe1);
     pthread_create(&thread2, NULL, handle_chat, (void *)&pipe2);
     pthread_join(thread1, NULL);
+    printf("thread1 has left\n");
     pthread_join(thread2, NULL);
+    printf("thread1 has left\n");
     return 0;
 }
