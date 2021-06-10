@@ -101,7 +101,7 @@ ssize_t receive(Client *client, void *buf, size_t n)
 	int size = recv(client->fd_send, buf, n, 0);
 	return size;
 }
-// #define DEBUG
+
 void *handle_chat(void *args)
 {
 	Client *client = (Client *)args;
@@ -112,10 +112,6 @@ void *handle_chat(void *args)
 	const int offset = strlen(send_buffer);
 	int send_buffer_index = offset;
 	ssize_t len;
-#ifdef DEBUG
-	char msg[2] = {client - clients + '0', '\n'};
-	send(client->fd_send, msg, 2, 0);
-#endif
 
 	int is_during_contiguous_send = 0;
 	int is_during_contiguous_recv = 0;
